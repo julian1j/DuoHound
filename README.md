@@ -1,6 +1,9 @@
 # DuoHound
 A BloodHound OpenGraph extension for Cisco Duo Security MFA
 
+<img width="1251" height="679" alt="duo_user_details" src="https://github.com/user-attachments/assets/39d044d9-4b7e-45a6-9662-99dd2f4a991a" />
+
+
 ## Overview
 
 DuoHound extracts data from Duo Security's Admin API and converts it into BloodHound's OpenGraph format. This data can be used to visualize MFA relationships, identify enrollment gaps, and analyze application access paths.
@@ -153,6 +156,7 @@ MATCH p = (u:DuoUser)-[*1..]->(a:DuoApplication)
 WHERE a.name contains 'VPN'
 RETURN p
 ```
+<img width="1768" height="193" alt="user_application_access" src="https://github.com/user-attachments/assets/08ce69e8-0d14-4849-b2b6-a66f52d2a3a1" />
 
 ## Security Insights
 
