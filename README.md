@@ -43,20 +43,8 @@ python duohound.py \
 |------|-------------|
 | `-o, --output` | Output filename (default: `duo_bloodhound_data.json`) |
 | `-v, --verbose` | Enable verbose logging |
-| `--skip-mfa-details` | Skip per-user MFA token and WebAuthN queries (faster for large environments but incomplete MFA device collection) |
 | `--version` | Show version |
 
-### Fast Mode
-
-For large environments (500+ users), collection times may be extended when collecting a user's hardware token and WebAuthN factors. Phones and tablets used with Duo Mobile for MFA will still be collected. To skip detailed MFA device queries:
-
-```bash
-python duohound.py \
-  --integration-key YOUR_IKEY \
-  --secret-key YOUR_SKEY \
-  --api-hostname api-XXXXXXXX.duosecurity.com \
-  --skip-mfa-details
-```
 
 ### Import into BloodHound
 
@@ -173,9 +161,6 @@ RETURN p
 - Verify API credentials
 - Ensure API application has read permissions
 - Check hostname format: `api-XXXXXXXX.duosecurity.com`
-
-**Rate limiting**
-- Use `--skip-mfa-details` for large environments
 
 ## Future Enhancement Ideas
 
