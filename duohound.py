@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-DuoHound v4 - Duo Admin API to BloodHound Import Script
+DuoHound - Duo Admin API to BloodHound Import Script
 
-Extracts users, groups, applications, administrators, and phones from Duo's Admin API
+Extracts users, groups, applications, and administrators from Duo's Admin API
 and structures them as nodes and edges for BloodHound import.
 
 Requirements:
@@ -10,11 +10,12 @@ Requirements:
 - Valid Duo Admin API credentials
 """
 
-__version__ = "4.0.0"
+__version__ = "1.0"
 
 import json
 import logging
 import argparse
+import os
 import sys
 from typing import Dict, List, Any, Optional, Callable
 
@@ -29,12 +30,10 @@ class DuoToBloodHoundConverter:
     GROUP_FIELDS = ['groups_allowed', 'PERMITTED_GROUPS', 'permitted_groups', 'allowed_groups']
     SKIP_VALUES = {'NO_USERS', 'NONE', 'NULL', 'EMPTY', '', 'NO_GROUPS'}
 
-    def __init__(self, integration_key: str, secret_key: str, api_hostname: str, skip_mfa_details: bool = False):
+    def __init__(self, integration_key: str, secret_key: str, api_hostname: str):
         self.admin_api = Admin(ikey=integration_key, skey=secret_key, host=api_hostname)
         self.nodes = []
         self.edges = []
-        self.skip_mfa_details = skip_mfa_details
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         self.logger = logging.getLogger(__name__)
 
     # --- Helpers ---
@@ -60,6 +59,9 @@ class DuoToBloodHoundConverter:
                 if len(items) < limit:
                     break
                 offset += limit
+            except RuntimeError as e:
+                self.logger.error(f"Duo API error fetching {name}: {e}")
+                raise
             except Exception as e:
                 self.logger.error(f"Error fetching {name}: {e}")
                 break
@@ -71,12 +73,19 @@ class DuoToBloodHoundConverter:
             items = self._unwrap(fetch_fn())
             self.logger.info(f"Retrieved {len(items)} {name}")
             return items
+        except RuntimeError as e:
+            self.logger.error(f"Duo API error fetching {name}: {e}")
+            raise
         except Exception as e:
             self.logger.error(f"Error fetching {name}: {e}")
             return []
 
     def _should_skip(self, val: str) -> bool:
         return val.upper() in self.SKIP_VALUES
+
+    @staticmethod
+    def _get_app_id(app: Dict[str, Any]) -> str:
+        return app.get('application_id', '') or app.get('integration_key', '')
 
     # --- Node/Edge Creation ---
 
@@ -93,9 +102,6 @@ class DuoToBloodHoundConverter:
 
     def get_all_users(self) -> List[Dict[str, Any]]:
         return self._paginated_fetch(self.admin_api.get_users, "users")
-
-    def get_all_phones(self) -> List[Dict[str, Any]]:
-        return self._paginated_fetch(self.admin_api.get_phones, "phones")
 
     def get_all_groups(self) -> List[Dict[str, Any]]:
         return self._simple_fetch(self.admin_api.get_groups, "groups")
@@ -117,81 +123,85 @@ class DuoToBloodHoundConverter:
             self.logger.error(f"Error fetching users for group {group_id}: {e}")
             return []
 
-    def get_user_tokens(self, user_id: str) -> List[Dict[str, Any]]:
-        try:
-            return self._unwrap(self.admin_api.get_user_tokens(user_id)) or []
-        except Exception as e:
-            self.logger.debug(f"Error fetching tokens for user {user_id}: {e}")
-            return []
-
-    def get_user_webauthn_credentials(self, user_id: str) -> List[Dict[str, Any]]:
-        try:
-            return self._unwrap(self.admin_api.get_user_webauthn_credentials(user_id)) or []
-        except Exception as e:
-            self.logger.debug(f"Error fetching WebAuthn for user {user_id}: {e}")
-            return []
-
     # --- Processing ---
 
     def process_users(self, users: List[Dict[str, Any]]) -> None:
         self.logger.info(f"Processing {len(users)} users...")
-        if self.skip_mfa_details:
-            self.logger.info("Skipping detailed MFA device queries")
+        phone_ids_seen, token_ids_seen, webauthn_ids_seen = set(), set(), set()
 
-        for idx, user in enumerate(users, 1):
+        for user in users:
             user_id, username = user.get('user_id', ''), user.get('username', '')
             if not user_id or not username:
                 continue
-            if idx % 10 == 0:
-                self.logger.info(f"Processing user {idx}/{len(users)}: {username}")
 
-            tokens, webauthn = [], []
-            if not self.skip_mfa_details:
-                tokens = self.get_user_tokens(user_id)
-                webauthn = self.get_user_webauthn_credentials(user_id)
+            phones = user.get('phones', [])
+            tokens = user.get('tokens', [])
+            webauthn = user.get('webauthncredentials', [])
 
             props = self._clean({
                 'email': user.get('email', ''), 'real_name': user.get('realname', ''),
                 'status': user.get('status', ''), 'created': user.get('created', ''),
                 'last_login': user.get('last_login'), 'is_enrolled': user.get('is_enrolled', False),
                 'last_directory_sync': user.get('last_directory_sync'),
-                'notes': user.get('notes', ''), 'duo_user_id': user_id
+                'notes': user.get('notes', ''), 'duo_user_id': user_id,
+                'phone_count': len(phones), 'has_phones': len(phones) > 0,
+                'token_count': len(tokens), 'has_tokens': len(tokens) > 0,
+                'webauthn_count': len(webauthn), 'has_webauthn': len(webauthn) > 0
             }, keep_empty=True)
-
-            if not self.skip_mfa_details:
-                props.update({'token_count': len(tokens), 'has_tokens': len(tokens) > 0,
-                              'webauthn_count': len(webauthn), 'has_webauthn': len(webauthn) > 0})
 
             self.nodes.append(self.create_node(user_id, "DuoUser", username, props))
 
-            if not self.skip_mfa_details:
-                self._process_tokens(user_id, tokens)
-                self._process_webauthn(user_id, webauthn)
+            # Process embedded MFA devices (deduplicated)
+            self._process_mfa_devices(user_id, phones, 'phone_id', self._create_phone_node, phone_ids_seen)
+            self._process_mfa_devices(user_id, tokens, 'token_id', self._create_token_node, token_ids_seen)
+            self._process_mfa_devices(user_id, webauthn, 'webauthnkey', self._create_webauthn_node, webauthn_ids_seen)
 
-        self.logger.info(f"Completed processing {len(users)} users")
+        self.logger.info(f"Created {len(phone_ids_seen)} phones, {len(token_ids_seen)} tokens, {len(webauthn_ids_seen)} WebAuthn credentials")
 
-    def _process_tokens(self, user_id: str, tokens: List[Dict[str, Any]]) -> None:
-        for t in tokens:
-            tid = t.get('token_id', '')
-            if not tid:
-                continue
-            ttype, serial = t.get('type', ''), t.get('serial', '')
-            name = f"{ttype} - {serial}" if serial and ttype else (serial or ttype or tid)
-            props = self._clean({'token_type': ttype, 'serial': serial, 'totp_step': t.get('totp_step'), 'duo_token_id': tid})
-            self.nodes.append(self.create_node(tid, "DuoToken", name, props))
-            self.edges.append(self.create_edge(user_id, tid, "DuoHasMFADevice"))
+    def _process_mfa_devices(self, user_id: str, devices: List[Dict], id_field: str,
+                                create_fn: Callable, seen: set) -> None:
+        for device in devices:
+            did = device.get(id_field, '')
+            if did and did not in seen:
+                seen.add(did)
+                create_fn(device)
+            if did:
+                self.edges.append(self.create_edge(user_id, did, "DuoHasMFADevice"))
 
-    def _process_webauthn(self, user_id: str, creds: List[Dict[str, Any]]) -> None:
-        for c in creds:
-            cid = c.get('webauthnkey', '')
-            if not cid:
-                continue
-            label = c.get('label', '')
-            props = self._clean({'label': label, 'date_added': c.get('date_added'),
-                                 'authenticator_type': c.get('authenticator_type', ''),
-                                 'credential_name': c.get('credential_name', ''), 'duo_webauthn_id': cid})
-            self.nodes.append(self.create_node(cid, "DuoWebAuthnCredential", label or cid, props))
-            self.edges.append(self.create_edge(user_id, cid, "DuoHasMFADevice"))
+    def _create_phone_node(self, phone: Dict) -> None:
+        pid = phone.get('phone_id', '')
+        name = phone.get('name', '') or phone.get('number', '') or pid
+        caps = phone.get('capabilities', [])
+        props = self._clean({
+            'number': phone.get('number', ''), 'name': phone.get('name', ''),
+            'activated': phone.get('activated', False), 'type': phone.get('type', ''),
+            'platform': phone.get('platform', ''), 'model': phone.get('model', ''),
+            'os_version': phone.get('os_version', ''), 'app_version': phone.get('app_version', ''),
+            'capabilities': ','.join(caps) if caps else '', 'encrypted': phone.get('encrypted', ''),
+            'fingerprint': phone.get('fingerprint', ''), 'screenlock': phone.get('screenlock', ''),
+            'tampered': phone.get('tampered', ''), 'last_seen': phone.get('last_seen', ''),
+            'sms_passcodes_sent': phone.get('sms_passcodes_sent', False), 'duo_phone_id': pid
+        })
+        self.nodes.append(self.create_node(pid, "DuoPhone", name, props))
+
+    def _create_token_node(self, token: Dict) -> None:
+        tid = token.get('token_id', '')
+        ttype, serial = token.get('type', ''), token.get('serial', '')
+        name = f"{ttype} - {serial}" if serial and ttype else (serial or ttype or tid)
+        props = self._clean({
+            'token_type': ttype, 'serial': serial,
+            'totp_step': token.get('totp_step'), 'duo_token_id': tid
+        })
+        self.nodes.append(self.create_node(tid, "DuoToken", name, props))
+
+    def _create_webauthn_node(self, cred: Dict) -> None:
+        wid = cred.get('webauthnkey', '')
+        label = cred.get('label', '') or cred.get('credential_name', '')
+        props = self._clean({
+            'label': label, 'credential_name': cred.get('credential_name', ''),
+            'date_added': cred.get('date_added'), 'duo_webauthn_id': wid
+        })
+        self.nodes.append(self.create_node(wid, "DuoWebAuthnCredential", label or wid, props))
 
     def process_groups(self, groups: List[Dict[str, Any]]) -> None:
         self.logger.info("Processing groups...")
@@ -212,7 +222,7 @@ class DuoToBloodHoundConverter:
     def process_applications(self, apps: List[Dict[str, Any]]) -> None:
         self.logger.info("Processing applications...")
         for a in apps:
-            aid = a.get('application_id', '') or a.get('integration_key', '')
+            aid = self._get_app_id(a)
             name = a.get('name', '')
             if not aid or not name:
                 continue
@@ -237,43 +247,20 @@ class DuoToBloodHoundConverter:
             }, keep_empty=True)
             self.nodes.append(self.create_node(aid, "DuoAdmin", name, props))
 
-    def process_phones(self, phones: List[Dict[str, Any]]) -> None:
-        self.logger.info("Processing phones...")
-        for p in phones:
-            pid = p.get('phone_id', '')
-            if not pid:
-                continue
-            name = p.get('name', '') or p.get('number', '') or pid
-            caps = p.get('capabilities', [])
-            props = self._clean({
-                'number': p.get('number', ''), 'name': p.get('name', ''), 'activated': p.get('activated', False),
-                'type': p.get('type', ''), 'platform': p.get('platform', ''), 'model': p.get('model', ''),
-                'os_version': p.get('os_version', ''), 'app_version': p.get('app_version', ''),
-                'capabilities': ','.join(caps) if caps else '', 'extension': p.get('extension', ''),
-                'predelay': p.get('predelay', ''), 'postdelay': p.get('postdelay', ''),
-                'encrypted': p.get('encrypted', ''), 'fingerprint': p.get('fingerprint', ''),
-                'screenlock': p.get('screenlock', ''), 'tampered': p.get('tampered', ''),
-                'last_seen': p.get('last_seen', ''), 'sms_passcodes_sent': p.get('sms_passcodes_sent', False),
-                'duo_phone_id': pid
-            })
-            self.nodes.append(self.create_node(pid, "DuoPhone", name, props))
-            for u in p.get('users', []):
-                if u.get('user_id'):
-                    self.edges.append(self.create_edge(u['user_id'], pid, "DuoHasMFADevice"))
-
     # --- Relationships ---
 
-    def _get_account_id(self) -> str:
+    def _clean_host(self) -> str:
         host = self.admin_api.host
-        clean = host[4:] if host.startswith('api-') else host
-        return f"duo_account_{clean}"
+        return host[4:] if host.startswith('api-') else host
+
+    def _get_account_id(self) -> str:
+        return f"duo_account_{self._clean_host()}"
 
     def create_duo_account_node(self) -> None:
         self.logger.info("Creating Duo Account node...")
-        host = self.admin_api.host
-        clean = host[4:] if host.startswith('api-') else host
+        clean = self._clean_host()
         self.nodes.append(self.create_node(self._get_account_id(), "DuoAccount",
-                                           f"Duo Account ({clean})", {'api_hostname': host, 'account_type': 'duo_tenant'}))
+                                           f"Duo Account ({clean})", {'api_hostname': self.admin_api.host, 'account_type': 'duo_tenant'}))
 
     def create_duo_account_relationships(self, users: List[Dict], admins: List[Dict],
                                           groups: List[Dict], apps: List[Dict]) -> None:
@@ -292,7 +279,7 @@ class DuoToBloodHoundConverter:
             if g.get('group_id'):
                 self.edges.append(self.create_edge(acct, g['group_id'], "DuoContains"))
         for ap in apps:
-            aid = ap.get('application_id', '') or ap.get('integration_key', '')
+            aid = self._get_app_id(ap)
             if aid:
                 self.edges.append(self.create_edge(acct, aid, "DuoContains"))
 
@@ -314,7 +301,7 @@ class DuoToBloodHoundConverter:
                     group_lookup[n['properties']['name']] = n
 
         for app in apps:
-            aid = app.get('application_id', '') or app.get('integration_key', '')
+            aid = self._get_app_id(app)
             if not aid:
                 continue
             aname = app.get('name', aid)
@@ -356,7 +343,7 @@ class DuoToBloodHoundConverter:
             else:
                 continue
 
-            if uid and len(uid) >= 2 and uid in user_lookup:
+            if uid and uid in user_lookup:
                 self.edges.append(self.create_edge(uid, aid, "DuoHasAccessTo", props))
 
     def _create_group_edges(self, groups: Any, aid: str, group_lookup: Dict, field: str) -> None:
@@ -378,7 +365,7 @@ class DuoToBloodHoundConverter:
             else:
                 continue
 
-            if not gid or len(gid) < 2:
+            if not gid:
                 continue
 
             node = group_lookup.get(gid)
@@ -396,13 +383,11 @@ class DuoToBloodHoundConverter:
         groups = self.get_all_groups()
         apps = self.get_all_applications()
         admins = self.get_all_admins()
-        phones = self.get_all_phones()
 
         self.process_users(users)
         self.process_groups(groups)
         self.process_applications(apps)
         self.process_admins(admins)
-        self.process_phones(phones)
         self.create_duo_account_node()
         self.create_application_access_edges(users, apps)
         self.create_duo_account_relationships(users, admins, groups, apps)
@@ -419,21 +404,28 @@ class DuoToBloodHoundConverter:
 
 def main():
     parser = argparse.ArgumentParser(description='DuoHound - Convert Duo Admin API data to BloodHound format')
-    parser.add_argument('--integration-key', required=True, help='Duo integration key')
-    parser.add_argument('--secret-key', required=True, help='Duo secret key')
-    parser.add_argument('--api-hostname', required=True, help='Duo API hostname')
+    parser.add_argument('--integration-key', default=os.environ.get('DUO_IKEY'),
+                        help='Duo integration key (env: DUO_IKEY)')
+    parser.add_argument('--secret-key', default=os.environ.get('DUO_SKEY'),
+                        help='Duo secret key (env: DUO_SKEY)')
+    parser.add_argument('--api-hostname', default=os.environ.get('DUO_HOST'),
+                        help='Duo API hostname (env: DUO_HOST)')
     parser.add_argument('--output', '-o', default='duo_bloodhound_data.json', help='Output filename')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
-    parser.add_argument('--skip-mfa-details', action='store_true', help='Skip detailed MFA device queries (faster)')
     parser.add_argument('--version', action='version', version=f'DuoHound {__version__}')
     args = parser.parse_args()
 
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    missing = [name for name, val in [('--integration-key / DUO_IKEY', args.integration_key),
+                                       ('--secret-key / DUO_SKEY', args.secret_key),
+                                       ('--api-hostname / DUO_HOST', args.api_hostname)] if not val]
+    if missing:
+        parser.error(f"Missing required credentials: {', '.join(missing)}")
+
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
     try:
-        converter = DuoToBloodHoundConverter(args.integration_key, args.secret_key,
-                                              args.api_hostname, args.skip_mfa_details)
+        converter = DuoToBloodHoundConverter(args.integration_key, args.secret_key, args.api_hostname)
         converter.export_to_file(args.output)
         print(f"Successfully exported Duo data to {args.output}")
     except Exception as e:
