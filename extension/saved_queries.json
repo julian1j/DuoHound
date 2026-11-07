@@ -1,0 +1,46 @@
+{
+  "queries": [
+    {
+      "query_key": "c39b5997-51e5-4248-8abb-1117c7b0a88d",
+      "name": "Administrators and Accounts",
+      "query": "MATCH p= (:Duo_Admin)-[:Duo_AdminTo]->(:Duo_Account)\nRETURN p\nLIMIT 1000",
+      "description": "Show administrator-to-account associations for all collected roles and statuses; these are not assertions of full tenant control.",
+      "category": "Access Relationships"
+    },
+    {
+      "query_key": "66e11621-5bf2-4861-ab89-d3d37becbfb3",
+      "name": "Users that are Members of Groups",
+      "query": "MATCH p=(u:Duo_User)-[:Duo_MemberOf]->(:Duo_Group)\nRETURN p\nLIMIT 1000",
+      "description": "Show end-user group memberships.",
+      "category": "Access Relationships"
+    },
+    {
+      "query_key": "e6c6bd4d-c15b-48e3-8f53-82357d7cb2b1",
+      "name": "Users with Bypass Status",
+      "query": "MATCH p = (u:Duo_User)\nWHERE u.status = 'bypass'\nRETURN p\nLIMIT 1000",
+      "description": "Find users whose Duo status is bypass.",
+      "category": "Inventory"
+    },
+    {
+      "query_key": "889316f9-a94f-4c64-858d-3c0abe9cfc47",
+      "name": "Unenrolled Users",
+      "query": "MATCH p = (u:Duo_User)\nWHERE u.is_enrolled = false\nRETURN p\nLIMIT 1000",
+      "description": "Find users reported by Duo as not enrolled.",
+      "category": "Inventory"
+    },
+    {
+      "query_key": "599c698e-fdf1-4235-b332-8afc215322e3",
+      "name": "Applications Accessible by All Users",
+      "query": "MATCH p=(u:Duo_User)-[r:Duo_HasAccessTo]->(a:Duo_Application)\nWHERE r.access_type = 'all_users'\nRETURN p\nLIMIT 1000",
+      "description": "Show active or bypass users eligible under an application configured for all users; authentication policies and primary credentials still apply.",
+      "category": "Access Relationships"
+    },
+    {
+      "query_key": "f2916182-57f8-449a-8c67-60fab376edf0",
+      "name": "Access Paths to VPN Applications",
+      "query": "MATCH p = (u:Duo_User)-[:Duo_MemberOf|Duo_HasAccessTo*1..2]->(a:Duo_Application)\nWHERE a.name CONTAINS 'VPN'\nRETURN p\nLIMIT 1000",
+      "description": "Show direct or group-mediated eligibility for applications with VPN in their name; this is not proof of application compromise.",
+      "category": "Access Relationships"
+    }
+  ]
+}

@@ -50,9 +50,10 @@ python duohound.py \
 
 1. Upload [DuoHound-Community-v1.0.0.zip](extension/DuoHound-Community-v1.0.0.zip) through [OpenGraph Management](https://bloodhound.specterops.io/opengraph/extensions/manage).
 2. Run the collector and upload `duo_bloodhound_data.json` through BloodHound's data upload modal.
-3. Explore the collected graph.
+3. Explore the installed saved queries under the DuoHound platform.
 
-The bundle contains [schema.json](extension/schema.json). Install it separately
+The bundle contains [schema.json](extension/schema.json) and
+[saved_queries.json](extension/saved_queries.json). Install the bundle separately
 from graph data. No Privilege Zone rules are included.
 
 ### Upgrading existing data
@@ -129,53 +130,12 @@ remain prerequisites. `Duo_AdminTo` includes limited and disabled administrators
 role-specific control paths are not modeled. MFA registration is deliberately
 represented from user to device and is not an impersonation edge.
 
-## Example Queries
+## Queries
 
-### All Duo Admins
+The six existing example queries are maintained in
+[saved_queries.json](extension/saved_queries.json). [Browse them in the Query Library](https://queries.specterops.io/?source=https%3A%2F%2Fraw.githubusercontent.com%2Fjulian1j%2FDuoHound%2Frefs%2Fheads%2Fmain%2Fextension%2Fsaved_queries.json&sourceLabel=DuoHound).
+The library source will become available after these changes reach upstream `main`.
 
-```cypher
-MATCH p= (:Duo_Admin)-[:Duo_AdminTo]->(:Duo_Account)
-RETURN p
-```
-
-### Users that are members of Groups
-
-```cypher
-MATCH p=(u:Duo_User)-[:Duo_MemberOf]->(:Duo_Group)
-RETURN p
-```
-
-### Users with bypass status (no MFA required)
-
-```cypher
-MATCH (u:Duo_User)
-WHERE u.status = 'bypass'
-RETURN u
-```
-
-### Unenrolled users
-
-```cypher
-MATCH (u:Duo_User)
-WHERE u.is_enrolled = false
-RETURN u
-```
-
-### Applications accessible by all users (not limited by groups)
-
-```cypher
-MATCH p=(u:Duo_User)-[r:Duo_HasAccessTo]->(a:Duo_Application)
-WHERE r.access_type = 'all_users'
-RETURN p
-```
-
-### Access paths to a specific application
-
-```cypher
-MATCH p = (u:Duo_User)-[*1..]->(a:Duo_Application)
-WHERE a.name contains 'VPN'
-RETURN p
-```
 <img width="1768" height="193" alt="user_application_access" src="https://github.com/user-attachments/assets/08ce69e8-0d14-4849-b2b6-a66f52d2a3a1" />
 
 ## Security Insights
