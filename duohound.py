@@ -308,9 +308,15 @@ class DuoToBloodHoundConverter:
                 continue
             aname = app.get('name', aid)
 
-            if app.get('user_access'):
-                self._create_user_edges(app['user_access'], aid, aname, user_lookup)
+            access = app.get('user_access')
+            if isinstance(access, str) and access.upper() == 'NO_USERS':
+                continue
+            if access:
+                self._create_user_edges(access, aid, aname, user_lookup)
 
+            # Group restrictions apply only in PERMITTED_GROUPS mode when a mode is supplied.
+            if isinstance(access, str) and access.upper() != 'PERMITTED_GROUPS':
+                continue
             for field in self.GROUP_FIELDS:
                 if app.get(field):
                     self._create_group_edges(app[field], aid, group_lookup, field)
@@ -339,6 +345,8 @@ class DuoToBloodHoundConverter:
                     continue
                 uid, props = entry, None
             elif isinstance(entry, dict):
+                if entry.get('access_granted') is False:
+                    continue
                 uid = entry.get('user_id')
                 props = self._clean({'access_granted': entry.get('access_granted'),
                                      'access_type': entry.get('access_type', 'unknown')}) or None
@@ -360,6 +368,8 @@ class DuoToBloodHoundConverter:
                     continue
                 gid, props = entry, {'permission_source': field}
             elif isinstance(entry, dict):
+                if entry.get('access_granted') is False:
+                    continue
                 gid = entry.get('group_id') or entry.get('name') or entry.get('group_name')
                 props = self._clean({'access_granted': entry.get('access_granted'),
                                      'access_type': entry.get('access_type', 'group_permission'),
