@@ -1,0 +1,101 @@
+{
+  "schema": {
+    "name": "DuoHound",
+    "display_name": "DuoHound",
+    "version": "v1.0.0",
+    "namespace": "Duo"
+  },
+  "node_kinds": [
+    {
+      "name": "Duo_Account",
+      "display_name": "Duo Account",
+      "description": "A Duo tenant identified by its API hostname.",
+      "is_display_kind": true,
+      "icon": "building",
+      "color": "#6BBF4E"
+    },
+    {
+      "name": "Duo_User",
+      "display_name": "Duo User",
+      "description": "A Duo end user and their MFA enrollment state.",
+      "is_display_kind": true,
+      "icon": "user",
+      "color": "#6BBF4E"
+    },
+    {
+      "name": "Duo_Admin",
+      "display_name": "Duo Administrator",
+      "description": "A Duo administrator. Role and status determine privileges; this node does not imply tenant-wide control.",
+      "is_display_kind": true,
+      "icon": "user-shield",
+      "color": "#6BBF4E"
+    },
+    {
+      "name": "Duo_Group",
+      "display_name": "Duo Group",
+      "description": "A group of Duo end users that may be permitted to authenticate to applications.",
+      "is_display_kind": true,
+      "icon": "users",
+      "color": "#6BBF4E"
+    },
+    {
+      "name": "Duo_Application",
+      "display_name": "Duo Application",
+      "description": "An application protected by Duo. Authentication eligibility does not imply control of the application.",
+      "is_display_kind": true,
+      "icon": "window-maximize",
+      "color": "#6BBF4E"
+    },
+    {
+      "name": "Duo_Phone",
+      "display_name": "Duo Phone",
+      "description": "A phone registered as an MFA device for one or more end users.",
+      "is_display_kind": true,
+      "icon": "mobile-screen-button",
+      "color": "#6BBF4E"
+    },
+    {
+      "name": "Duo_Token",
+      "display_name": "Duo Token",
+      "description": "A hardware token registered as an MFA factor for one or more end users.",
+      "is_display_kind": true,
+      "icon": "key",
+      "color": "#6BBF4E"
+    },
+    {
+      "name": "Duo_WebAuthnCredential",
+      "display_name": "Duo WebAuthn Credential",
+      "description": "A WebAuthn authenticator registered to a Duo end user.",
+      "is_display_kind": true,
+      "icon": "fingerprint",
+      "color": "#6BBF4E"
+    }
+  ],
+  "relationship_kinds": [
+    {
+      "name": "Duo_Contains",
+      "description": "The Duo account contains this object. Organizational containment does not grant control of the object.",
+      "is_traversable": false
+    },
+    {
+      "name": "Duo_AdminTo",
+      "description": "This administrator belongs to the Duo account. Emitted for every admin role and status, including read-only and disabled admins; it does not establish full account control.",
+      "is_traversable": false
+    },
+    {
+      "name": "Duo_MemberOf",
+      "description": "This user is a member of the group and can inherit its application eligibility. Authentication still depends on user status, primary credentials, MFA, and policy.",
+      "is_traversable": true
+    },
+    {
+      "name": "Duo_HasAccessTo",
+      "description": "The user or group is permitted by the collected application access configuration. Eligibility to authenticate does not establish application control or successful authentication.",
+      "is_traversable": false
+    },
+    {
+      "name": "Duo_HasMFADevice",
+      "description": "This user has the registered MFA device. Control of the user does not establish possession or control of the device or its credentials.",
+      "is_traversable": false
+    }
+  ]
+}

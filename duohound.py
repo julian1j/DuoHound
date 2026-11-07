@@ -39,7 +39,10 @@ class DuoToBloodHoundConverter:
     # --- Helpers ---
 
     def _unwrap(self, response: Any) -> List[Dict[str, Any]]:
-        return response if isinstance(response, list) else response.get('response', response)
+        items = response.get('response', response) if isinstance(response, dict) else response
+        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+            raise ValueError("Expected a list of Duo resource objects")
+        return items
 
     def _clean(self, props: Dict[str, Any], keep_empty: bool = False) -> Dict[str, Any]:
         if keep_empty:
@@ -64,7 +67,7 @@ class DuoToBloodHoundConverter:
                 raise
             except Exception as e:
                 self.logger.error(f"Error fetching {name}: {e}")
-                break
+                raise
         return all_items
 
     def _simple_fetch(self, fetch_fn: Callable, name: str) -> List[Dict[str, Any]]:
@@ -78,7 +81,7 @@ class DuoToBloodHoundConverter:
             raise
         except Exception as e:
             self.logger.error(f"Error fetching {name}: {e}")
-            return []
+            raise
 
     def _should_skip(self, val: str) -> bool:
         return val.upper() in self.SKIP_VALUES
@@ -113,15 +116,14 @@ class DuoToBloodHoundConverter:
         for method in ['get_applications', 'get_integrations']:
             if hasattr(self.admin_api, method):
                 return self._simple_fetch(getattr(self.admin_api, method), "applications")
-        self.logger.warning("No applications/integrations method found")
-        return []
+        raise RuntimeError("Duo client has no applications/integrations method")
 
     def get_group_users(self, group_id: str) -> List[str]:
         try:
             return [u['user_id'] for u in self._unwrap(self.admin_api.get_group_users(group_id)) if u.get('user_id')]
         except Exception as e:
             self.logger.error(f"Error fetching users for group {group_id}: {e}")
-            return []
+            raise
 
     # --- Processing ---
 
@@ -149,7 +151,7 @@ class DuoToBloodHoundConverter:
                 'webauthn_count': len(webauthn), 'has_webauthn': len(webauthn) > 0
             }, keep_empty=True)
 
-            self.nodes.append(self.create_node(user_id, "DuoUser", username, props))
+            self.nodes.append(self.create_node(user_id, "Duo_User", username, props))
 
             # Process embedded MFA devices (deduplicated)
             self._process_mfa_devices(user_id, phones, 'phone_id', self._create_phone_node, phone_ids_seen)
@@ -166,7 +168,7 @@ class DuoToBloodHoundConverter:
                 seen.add(did)
                 create_fn(device)
             if did:
-                self.edges.append(self.create_edge(user_id, did, "DuoHasMFADevice"))
+                self.edges.append(self.create_edge(user_id, did, "Duo_HasMFADevice"))
 
     def _create_phone_node(self, phone: Dict) -> None:
         pid = phone.get('phone_id', '')
@@ -182,7 +184,7 @@ class DuoToBloodHoundConverter:
             'tampered': phone.get('tampered', ''), 'last_seen': phone.get('last_seen', ''),
             'sms_passcodes_sent': phone.get('sms_passcodes_sent', False), 'duo_phone_id': pid
         })
-        self.nodes.append(self.create_node(pid, "DuoPhone", name, props))
+        self.nodes.append(self.create_node(pid, "Duo_Phone", name, props))
 
     def _create_token_node(self, token: Dict) -> None:
         tid = token.get('token_id', '')
@@ -192,7 +194,7 @@ class DuoToBloodHoundConverter:
             'token_type': ttype, 'serial': serial,
             'totp_step': token.get('totp_step'), 'duo_token_id': tid
         })
-        self.nodes.append(self.create_node(tid, "DuoToken", name, props))
+        self.nodes.append(self.create_node(tid, "Duo_Token", name, props))
 
     def _create_webauthn_node(self, cred: Dict) -> None:
         wid = cred.get('webauthnkey', '')
@@ -201,7 +203,7 @@ class DuoToBloodHoundConverter:
             'label': label, 'credential_name': cred.get('credential_name', ''),
             'date_added': cred.get('date_added'), 'duo_webauthn_id': wid
         })
-        self.nodes.append(self.create_node(wid, "DuoWebAuthnCredential", label or wid, props))
+        self.nodes.append(self.create_node(wid, "Duo_WebAuthnCredential", label or wid, props))
 
     def process_groups(self, groups: List[Dict[str, Any]]) -> None:
         self.logger.info("Processing groups...")
@@ -215,9 +217,9 @@ class DuoToBloodHoundConverter:
                 'push_enabled': g.get('push_enabled', False), 'sms_enabled': g.get('sms_enabled', False),
                 'voice_enabled': g.get('voice_enabled', False), 'duo_group_id': gid
             }, keep_empty=True)
-            self.nodes.append(self.create_node(gid, "DuoGroup", name, props))
+            self.nodes.append(self.create_node(gid, "Duo_Group", name, props))
             for uid in self.get_group_users(gid):
-                self.edges.append(self.create_edge(uid, gid, "DuoMemberOf"))
+                self.edges.append(self.create_edge(uid, gid, "Duo_MemberOf"))
 
     def process_applications(self, apps: List[Dict[str, Any]]) -> None:
         self.logger.info("Processing applications...")
@@ -231,7 +233,7 @@ class DuoToBloodHoundConverter:
                 'notes': a.get('notes', ''), 'username_normalization_policy': a.get('username_normalization_policy', ''),
                 'duo_application_id': aid
             }, keep_empty=True)
-            self.nodes.append(self.create_node(aid, "DuoApplication", name, props))
+            self.nodes.append(self.create_node(aid, "Duo_Application", name, props))
 
     def process_admins(self, admins: List[Dict[str, Any]]) -> None:
         self.logger.info("Processing administrators...")
@@ -245,7 +247,7 @@ class DuoToBloodHoundConverter:
                 'status': a.get('status', ''), 'created': a.get('created', ''), 'last_login': a.get('last_login'),
                 'password_change_required': a.get('password_change_required', False), 'duo_admin_id': aid
             }, keep_empty=True)
-            self.nodes.append(self.create_node(aid, "DuoAdmin", name, props))
+            self.nodes.append(self.create_node(aid, "Duo_Admin", name, props))
 
     # --- Relationships ---
 
@@ -259,43 +261,43 @@ class DuoToBloodHoundConverter:
     def create_duo_account_node(self) -> None:
         self.logger.info("Creating Duo Account node...")
         clean = self._clean_host()
-        self.nodes.append(self.create_node(self._get_account_id(), "DuoAccount",
+        self.nodes.append(self.create_node(self._get_account_id(), "Duo_Account",
                                            f"Duo Account ({clean})", {'api_hostname': self.admin_api.host, 'account_type': 'duo_tenant'}))
 
     def create_duo_account_relationships(self, users: List[Dict], admins: List[Dict],
                                           groups: List[Dict], apps: List[Dict]) -> None:
         self.logger.info("Creating Duo Account relationships...")
         acct = self._get_account_id()
-        mfa_kinds = {'DuoPhone', 'DuoToken', 'DuoWebAuthnCredential'}
+        mfa_kinds = {'Duo_Phone', 'Duo_Token', 'Duo_WebAuthnCredential'}
 
         for u in users:
             if u.get('user_id'):
-                self.edges.append(self.create_edge(acct, u['user_id'], "DuoContains"))
+                self.edges.append(self.create_edge(acct, u['user_id'], "Duo_Contains"))
         for a in admins:
             if a.get('admin_id'):
-                self.edges.append(self.create_edge(acct, a['admin_id'], "DuoContains"))
-                self.edges.append(self.create_edge(a['admin_id'], acct, "DuoAdminTo"))
+                self.edges.append(self.create_edge(acct, a['admin_id'], "Duo_Contains"))
+                self.edges.append(self.create_edge(a['admin_id'], acct, "Duo_AdminTo"))
         for g in groups:
             if g.get('group_id'):
-                self.edges.append(self.create_edge(acct, g['group_id'], "DuoContains"))
+                self.edges.append(self.create_edge(acct, g['group_id'], "Duo_Contains"))
         for ap in apps:
             aid = self._get_app_id(ap)
             if aid:
-                self.edges.append(self.create_edge(acct, aid, "DuoContains"))
+                self.edges.append(self.create_edge(acct, aid, "Duo_Contains"))
 
         mfa_count = 0
         for n in self.nodes:
             if set(n.get('kinds', [])) & mfa_kinds:
-                self.edges.append(self.create_edge(acct, n['id'], "DuoContains"))
+                self.edges.append(self.create_edge(acct, n['id'], "Duo_Contains"))
                 mfa_count += 1
-        self.logger.info(f"Created DuoContains edges to {mfa_count} MFA devices")
+        self.logger.info(f"Created Duo_Contains edges to {mfa_count} MFA devices")
 
     def create_application_access_edges(self, users: List[Dict], apps: List[Dict]) -> None:
         self.logger.info("Creating application access relationships...")
         user_lookup = {u['user_id']: u for u in users if u.get('user_id')}
         group_lookup = {}
         for n in self.nodes:
-            if n.get('kinds') == ['DuoGroup']:
+            if n.get('kinds') == ['Duo_Group']:
                 group_lookup[n['id']] = n
                 if n['properties'].get('name'):
                     group_lookup[n['properties']['name']] = n
@@ -306,9 +308,15 @@ class DuoToBloodHoundConverter:
                 continue
             aname = app.get('name', aid)
 
-            if app.get('user_access'):
-                self._create_user_edges(app['user_access'], aid, aname, user_lookup)
+            access = app.get('user_access')
+            if isinstance(access, str) and access.upper() == 'NO_USERS':
+                continue
+            if access:
+                self._create_user_edges(access, aid, aname, user_lookup)
 
+            # Group restrictions apply only in PERMITTED_GROUPS mode when a mode is supplied.
+            if isinstance(access, str) and access.upper() != 'PERMITTED_GROUPS':
+                continue
             for field in self.GROUP_FIELDS:
                 if app.get(field):
                     self._create_group_edges(app[field], aid, group_lookup, field)
@@ -318,7 +326,7 @@ class DuoToBloodHoundConverter:
         self.logger.info(f"Creating access edges for ALL_USERS to app {aname}")
         for u in user_lookup.values():
             if u.get('status') in ['active', 'bypass']:
-                self.edges.append(self.create_edge(u['user_id'], aid, "DuoHasAccessTo", {'access_type': 'all_users'}))
+                self.edges.append(self.create_edge(u['user_id'], aid, "Duo_HasAccessTo", {'access_type': 'all_users'}))
 
     def _create_user_edges(self, access: Any, aid: str, aname: str, user_lookup: Dict) -> None:
         if isinstance(access, str):
@@ -337,6 +345,8 @@ class DuoToBloodHoundConverter:
                     continue
                 uid, props = entry, None
             elif isinstance(entry, dict):
+                if entry.get('access_granted') is False:
+                    continue
                 uid = entry.get('user_id')
                 props = self._clean({'access_granted': entry.get('access_granted'),
                                      'access_type': entry.get('access_type', 'unknown')}) or None
@@ -344,7 +354,7 @@ class DuoToBloodHoundConverter:
                 continue
 
             if uid and uid in user_lookup:
-                self.edges.append(self.create_edge(uid, aid, "DuoHasAccessTo", props))
+                self.edges.append(self.create_edge(uid, aid, "Duo_HasAccessTo", props))
 
     def _create_group_edges(self, groups: Any, aid: str, group_lookup: Dict, field: str) -> None:
         if isinstance(groups, str):
@@ -358,6 +368,8 @@ class DuoToBloodHoundConverter:
                     continue
                 gid, props = entry, {'permission_source': field}
             elif isinstance(entry, dict):
+                if entry.get('access_granted') is False:
+                    continue
                 gid = entry.get('group_id') or entry.get('name') or entry.get('group_name')
                 props = self._clean({'access_granted': entry.get('access_granted'),
                                      'access_type': entry.get('access_type', 'group_permission'),
@@ -373,12 +385,14 @@ class DuoToBloodHoundConverter:
                 self.logger.warning(f"Group {gid} not found for app {aid}")
                 continue
 
-            self.edges.append(self.create_edge(node['id'], aid, "DuoHasAccessTo", props))
+            self.edges.append(self.create_edge(node['id'], aid, "Duo_HasAccessTo", props))
 
     # --- Export ---
 
     def generate_bloodhound_data(self) -> Dict[str, Any]:
         self.logger.info("Fetching all data from Duo...")
+        self.nodes = []
+        self.edges = []
         users = self.get_all_users()
         groups = self.get_all_groups()
         apps = self.get_all_applications()
@@ -393,7 +407,7 @@ class DuoToBloodHoundConverter:
         self.create_duo_account_relationships(users, admins, groups, apps)
 
         self.logger.info(f"Generated {len(self.nodes)} nodes and {len(self.edges)} edges")
-        return {"metadata": {"source_kind": "DuoBase"}, "graph": {"nodes": self.nodes, "edges": self.edges}}
+        return {"metadata": {"source_kind": "Duo"}, "graph": {"nodes": self.nodes, "edges": self.edges}}
 
     def export_to_file(self, filename: str) -> None:
         data = self.generate_bloodhound_data()

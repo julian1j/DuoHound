@@ -13,7 +13,7 @@ DuoHound extracts data from Duo Security's Admin API and converts it into BloodH
 DuoHound uses the official Duo Security Python client, found here: https://github.com/duosecurity/duo_client_python
 
 ```bash
-pip install duo-client
+python -m pip install -r requirements.txt
 ```
 
 ## Setup
@@ -21,10 +21,13 @@ pip install duo-client
 ### Create Duo Admin API Application
 
 1. Log in to the Duo Admin Panel
-2. Navigate to **Applications** → **Protect an Application**
-3. Search for "Admin API" and click **Protect**
-4. Set permissions to **Grant Resource - Read, Grant Administrators - Read, Grant Read Information**
+2. Navigate to **Applications** → **Application Catalog**
+3. Search for "Admin API" and click **+ Add** (requires a Duo Owner)
+4. Set permissions to **Grant resource - Read** and **Grant administrators - Read**
 5. Note your **Integration key**, **Secret key**, and **API hostname**
+
+A Duo plan or trial with Admin API access is required. Collection uses read operations;
+write permissions are not required. See the [Duo Admin API documentation](https://duo.com/docs/adminapi).
 
 ## Usage
 
@@ -41,6 +44,9 @@ python duohound.py \
 
 | Flag | Description |
 |------|-------------|
+| `--integration-key` | Integration key (environment: `DUO_IKEY`) |
+| `--secret-key` | Secret key (environment: `DUO_SKEY`) |
+| `--api-hostname` | API hostname (environment: `DUO_HOST`) |
 | `-o, --output` | Output filename (default: `duo_bloodhound_data.json`) |
 | `-v, --verbose` | Enable verbose logging |
 | `--version` | Show version |
@@ -48,102 +54,94 @@ python duohound.py \
 
 ### Import into BloodHound
 
-1. Open BloodHound Community Edition or BloodHound Enterprise
-2. Drag and drop the json file into BloodHound's file upload modal.
-3. Query your Duo environment using cypher
+1. Upload [DuoHound-Community-v1.0.0.zip](extension/DuoHound-Community-v1.0.0.zip) through [OpenGraph Management](https://bloodhound.specterops.io/opengraph/extensions/manage).
+2. Run the collector and upload `duo_bloodhound_data.json` through BloodHound's data upload modal.
+3. Explore the installed saved queries under the DuoHound platform.
+
+The bundle contains [schema.json](extension/schema.json) and
+[saved_queries.json](extension/saved_queries.json). Install the bundle separately
+from graph data. No Privilege Zone rules are included.
+
+### Upgrading existing data
+
+Owned kinds now use the `Duo_` namespace, for example `DuoUser` becomes `Duo_User`
+and `DuoMemberOf` becomes `Duo_MemberOf`. The data source changes from `DuoBase`
+to `Duo`; object IDs are unchanged. Recollect and import updated data after
+installing the bundle, and update custom Cypher references. Importing new data
+does not automatically remove legacy labels or relationships; review any legacy
+data cleanup separately.
+
+For future component changes, increment `schema.version`, commit a matching
+Community ZIP, update its README link, and upload the new bundle through
+OpenGraph Management to update the installed extension.
 
 ## Data Model
 
 ```mermaid
 graph LR
     subgraph Nodes
-        Account[DuoAccount]
-        User[DuoUser]
-        Admin[DuoAdmin]
-        Group[DuoGroup]
-        App[DuoApplication]
-        Phone[DuoPhone]
-        Token[DuoToken]
-        WebAuthn[DuoWebAuthnCredential]
+        Account[Duo_Account]
+        User[Duo_User]
+        Admin[Duo_Admin]
+        Group[Duo_Group]
+        App[Duo_Application]
+        Phone[Duo_Phone]
+        Token[Duo_Token]
+        WebAuthn[Duo_WebAuthnCredential]
     end
 
-    Account -->|DuoContains| User
-    Account -->|DuoContains| Admin
-    Account -->|DuoContains| Group
-    Account -->|DuoContains| App
-    Account -->|DuoContains| Phone
-    Account -->|DuoContains| Token
-    Account -->|DuoContains| WebAuthn
+    Account -->|Duo_Contains| User
+    Account -->|Duo_Contains| Admin
+    Account -->|Duo_Contains| Group
+    Account -->|Duo_Contains| App
+    Account -->|Duo_Contains| Phone
+    Account -->|Duo_Contains| Token
+    Account -->|Duo_Contains| WebAuthn
 
-    Admin -->|DuoAdminTo| Account
-    User -->|DuoMemberOf| Group
-    User -->|DuoHasAccessTo| App
-    Group -->|DuoHasAccessTo| App
-    User -->|DuoHasMFADevice| Phone
-    User -->|DuoHasMFADevice| Token
-    User -->|DuoHasMFADevice| WebAuthn
+    Admin -->|Duo_AdminTo| Account
+    User -->|Duo_MemberOf| Group
+    User -->|Duo_HasAccessTo| App
+    Group -->|Duo_HasAccessTo| App
+    User -->|Duo_HasMFADevice| Phone
+    User -->|Duo_HasMFADevice| Token
+    User -->|Duo_HasMFADevice| WebAuthn
 ```
 
 ### Node Properties
 
 | Node | Key Properties |
 |------|----------------|
-| DuoAccount | `api_hostname`, `account_type` |
-| DuoUser | `email`, `status`, `is_enrolled`, `token_count`, `webauthn_count` |
-| DuoAdmin | `email`, `role`, `status` |
-| DuoGroup | `description`, `push_enabled`, `sms_enabled` |
-| DuoApplication | `type`, `integration_key` |
-| DuoPhone | `number`, `platform`, `activated`, `capabilities` |
-| DuoToken | `token_type`, `serial` |
-| DuoWebAuthnCredential | `label`, `authenticator_type` |
+| Duo_Account | `api_hostname`, `account_type` |
+| Duo_User | `email`, `status`, `is_enrolled`, `token_count`, `webauthn_count` |
+| Duo_Admin | `email`, `role`, `status` |
+| Duo_Group | `description`, `push_enabled`, `sms_enabled` |
+| Duo_Application | `type`, `integration_key` |
+| Duo_Phone | `number`, `platform`, `activated`, `capabilities` |
+| Duo_Token | `token_type`, `serial` |
+| Duo_WebAuthnCredential | `label`, `credential_name`, `date_added` |
 
-## Example Queries
+### Relationship semantics
 
-### All Duo Admins
+| Relationship | Direction | Traversable | Meaning |
+|---|---|---|---|
+| `Duo_Contains` | Account → object | No | Organizational containment. |
+| `Duo_AdminTo` | Administrator → account | No | Association for all roles and statuses; does not assert tenant control. |
+| `Duo_MemberOf` | User → group | Yes | User inherits the group's application eligibility, subject to authentication requirements. |
+| `Duo_HasAccessTo` | User/group → application | No | Configured authentication eligibility, not application control. |
+| `Duo_HasMFADevice` | User → MFA device | No | Device registration does not establish device possession or control. |
 
-```cypher
-MATCH p= (:DuoAdmin)-[:DuoAdminTo]->(:DuoAccount)
-RETURN p
-```
+Application access configuration does not prove successful authentication or
+control of the protected service. Primary credentials, user state, MFA and policy
+remain prerequisites. `Duo_AdminTo` includes limited and disabled administrators;
+role-specific control paths are not modeled. MFA registration is deliberately
+represented from user to device and is not an impersonation edge.
 
-### Users that are members of Groups
+## Queries
 
-```cypher
-MATCH p=(u:DuoUser)-[:DuoMemberOf]->(:DuoGroup)
-RETURN p
-```
+The six existing example queries are maintained in
+[saved_queries.json](extension/saved_queries.json). [Browse them in the Query Library](https://queries.specterops.io/?source=https%3A%2F%2Fraw.githubusercontent.com%2Fjulian1j%2FDuoHound%2Frefs%2Fheads%2Fmain%2Fextension%2Fsaved_queries.json&sourceLabel=DuoHound).
+The library source will become available after these changes reach upstream `main`.
 
-### Users with bypass status (no MFA required)
-
-```cypher
-MATCH (u:DuoUser)
-WHERE u.status = 'bypass'
-RETURN u
-```
-
-### Unenrolled users
-
-```cypher
-MATCH (u:DuoUser)
-WHERE u.is_enrolled = false
-RETURN u
-```
-
-### Applications accessible by all users (not limited by groups)
-
-```cypher
-MATCH p=(u:DuoUser)-[r:DuoHasAccessTo]->(a:DuoApplication)
-WHERE r.access_type = 'all_users'
-RETURN p
-```
-
-### Access paths to a specific application
-
-```cypher
-MATCH p = (u:DuoUser)-[*1..]->(a:DuoApplication)
-WHERE a.name contains 'VPN'
-RETURN p
-```
 <img width="1768" height="193" alt="user_application_access" src="https://github.com/user-attachments/assets/08ce69e8-0d14-4849-b2b6-a66f52d2a3a1" />
 
 ## Security Insights
@@ -151,9 +149,9 @@ RETURN p
 | Finding | Query Filter | Risk |
 |---------|--------------|------|
 | Bypass users | `status = 'bypass'` | Can authenticate without MFA |
-| Lack of group-restricted access | `access_type = 'all_users'` | Overly permissive app access |
+| Lack of group-restricted access | `access_type = 'all_users'` | Broad authentication eligibility; review policy and primary authentication |
 | Unenrolled users | `is_enrolled = false` | No MFA devices registered |
-| Weak MFA factor | `capabilities = 'sms'` | Relies on sms-based MFA only |
+| Weak MFA factor | `capabilities = 'sms'` | Phone reports SMS capability only; other enrolled factors may exist |
 
 ## Troubleshooting
 
