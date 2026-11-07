@@ -10,9 +10,6 @@ DuoHound extracts data from Duo Security's Admin API and converts it into BloodH
 
 ## Installation
 
-Use Python 3 and the official `duo-client` package on Windows, Linux, or macOS.
-Install the Community bundle on BloodHound v9.9.0 or later with a PostgreSQL graph database.
-
 DuoHound uses the official Duo Security Python client, found here: https://github.com/duosecurity/duo_client_python
 
 ```bash
