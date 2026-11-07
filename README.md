@@ -156,14 +156,6 @@ The library source will become available after these changes reach upstream `mai
 | Unenrolled users | `is_enrolled = false` | No MFA devices registered |
 | Weak MFA factor | `capabilities = 'sms'` | Phone reports SMS capability only; other enrolled factors may exist |
 
-## Collection limitations
-
-Only embedded end-user MFA devices and the objects shown above are collected.
-This does not collect application credentials or evaluate effective policies,
-administrator role privileges, or administrative-unit scope. The six migrated
-queries do not cover MFA-device inventory or account containment; no new queries
-or Privilege Zone rules are added in this update.
-
 ## Troubleshooting
 
 **No data returned**
