@@ -10,10 +10,13 @@ DuoHound extracts data from Duo Security's Admin API and converts it into BloodH
 
 ## Installation
 
+Use Python 3 and the official `duo-client` package on Windows, Linux, or macOS.
+Install the Community bundle on BloodHound v9.9.0 or later with a PostgreSQL graph database.
+
 DuoHound uses the official Duo Security Python client, found here: https://github.com/duosecurity/duo_client_python
 
 ```bash
-pip install duo-client
+python -m pip install -r requirements.txt
 ```
 
 ## Setup
@@ -21,10 +24,13 @@ pip install duo-client
 ### Create Duo Admin API Application
 
 1. Log in to the Duo Admin Panel
-2. Navigate to **Applications** → **Protect an Application**
-3. Search for "Admin API" and click **Protect**
-4. Set permissions to **Grant Resource - Read, Grant Administrators - Read, Grant Read Information**
+2. Navigate to **Applications** → **Application Catalog**
+3. Search for "Admin API" and click **+ Add** (requires a Duo Owner)
+4. Set permissions to **Grant resource - Read** and **Grant administrators - Read**
 5. Note your **Integration key**, **Secret key**, and **API hostname**
+
+A Duo plan or trial with Admin API access is required. Collection uses read operations;
+write permissions are not required. See the [Duo Admin API documentation](https://duo.com/docs/adminapi).
 
 ## Usage
 
@@ -41,6 +47,9 @@ python duohound.py \
 
 | Flag | Description |
 |------|-------------|
+| `--integration-key` | Integration key (environment: `DUO_IKEY`) |
+| `--secret-key` | Secret key (environment: `DUO_SKEY`) |
+| `--api-hostname` | API hostname (environment: `DUO_HOST`) |
 | `-o, --output` | Output filename (default: `duo_bloodhound_data.json`) |
 | `-v, --verbose` | Enable verbose logging |
 | `--version` | Show version |
@@ -112,7 +121,7 @@ graph LR
 | Duo_Application | `type`, `integration_key` |
 | Duo_Phone | `number`, `platform`, `activated`, `capabilities` |
 | Duo_Token | `token_type`, `serial` |
-| Duo_WebAuthnCredential | `label`, `authenticator_type` |
+| Duo_WebAuthnCredential | `label`, `credential_name`, `date_added` |
 
 ### Relationship semantics
 
@@ -143,9 +152,17 @@ The library source will become available after these changes reach upstream `mai
 | Finding | Query Filter | Risk |
 |---------|--------------|------|
 | Bypass users | `status = 'bypass'` | Can authenticate without MFA |
-| Lack of group-restricted access | `access_type = 'all_users'` | Overly permissive app access |
+| Lack of group-restricted access | `access_type = 'all_users'` | Broad authentication eligibility; review policy and primary authentication |
 | Unenrolled users | `is_enrolled = false` | No MFA devices registered |
-| Weak MFA factor | `capabilities = 'sms'` | Relies on sms-based MFA only |
+| Weak MFA factor | `capabilities = 'sms'` | Phone reports SMS capability only; other enrolled factors may exist |
+
+## Collection limitations
+
+Only embedded end-user MFA devices and the objects shown above are collected.
+This does not collect application credentials or evaluate effective policies,
+administrator role privileges, or administrative-unit scope. The six migrated
+queries do not cover MFA-device inventory or account containment; no new queries
+or Privilege Zone rules are added in this update.
 
 ## Troubleshooting
 
