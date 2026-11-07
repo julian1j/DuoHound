@@ -39,7 +39,10 @@ class DuoToBloodHoundConverter:
     # --- Helpers ---
 
     def _unwrap(self, response: Any) -> List[Dict[str, Any]]:
-        return response if isinstance(response, list) else response.get('response', response)
+        items = response.get('response', response) if isinstance(response, dict) else response
+        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+            raise ValueError("Expected a list of Duo resource objects")
+        return items
 
     def _clean(self, props: Dict[str, Any], keep_empty: bool = False) -> Dict[str, Any]:
         if keep_empty:
@@ -64,7 +67,7 @@ class DuoToBloodHoundConverter:
                 raise
             except Exception as e:
                 self.logger.error(f"Error fetching {name}: {e}")
-                break
+                raise
         return all_items
 
     def _simple_fetch(self, fetch_fn: Callable, name: str) -> List[Dict[str, Any]]:
@@ -78,7 +81,7 @@ class DuoToBloodHoundConverter:
             raise
         except Exception as e:
             self.logger.error(f"Error fetching {name}: {e}")
-            return []
+            raise
 
     def _should_skip(self, val: str) -> bool:
         return val.upper() in self.SKIP_VALUES
@@ -113,15 +116,14 @@ class DuoToBloodHoundConverter:
         for method in ['get_applications', 'get_integrations']:
             if hasattr(self.admin_api, method):
                 return self._simple_fetch(getattr(self.admin_api, method), "applications")
-        self.logger.warning("No applications/integrations method found")
-        return []
+        raise RuntimeError("Duo client has no applications/integrations method")
 
     def get_group_users(self, group_id: str) -> List[str]:
         try:
             return [u['user_id'] for u in self._unwrap(self.admin_api.get_group_users(group_id)) if u.get('user_id')]
         except Exception as e:
             self.logger.error(f"Error fetching users for group {group_id}: {e}")
-            return []
+            raise
 
     # --- Processing ---
 
