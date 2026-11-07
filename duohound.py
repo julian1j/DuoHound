@@ -381,6 +381,8 @@ class DuoToBloodHoundConverter:
 
     def generate_bloodhound_data(self) -> Dict[str, Any]:
         self.logger.info("Fetching all data from Duo...")
+        self.nodes = []
+        self.edges = []
         users = self.get_all_users()
         groups = self.get_all_groups()
         apps = self.get_all_applications()
